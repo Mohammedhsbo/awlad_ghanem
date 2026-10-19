@@ -1,10 +1,10 @@
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { ServerOptions } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { createClient } from 'redis';
 import { INestApplication } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { createSocketAuthMiddleware } from './auth.js';
+import { connectRedisClient, createRedisClient, shouldConnectToRedis } from '../config/redis.js';
 
 export class RedisIoAdapter extends IoAdapter {
   private adapterConstructor: ReturnType<typeof createAdapter> | undefined;
@@ -14,22 +14,46 @@ export class RedisIoAdapter extends IoAdapter {
   }
 
   async connectToRedis(): Promise<void> {
-    if (!process.env.REDIS_URL) {
-      console.warn('Redis unavailable; skipping Redis adapter for WebSockets.');
+    if (!shouldConnectToRedis()) {
       return;
     }
 
-    const pubClient = createClient({ url: process.env.REDIS_URL });
+    const pubClient = createRedisClient();
     const subClient = pubClient.duplicate();
+    const fallback = 'Socket.IO will use its in-memory adapter';
+    const [pubConnected, subConnected] = await Promise.all([
+      connectRedisClient(pubClient, fallback),
+      connectRedisClient(subClient, fallback),
+    ]);
 
-    pubClient.on('error', (err) => console.error('Redis PubClient error', err));
-    subClient.on('error', (err) => console.error('Redis SubClient error', err));
+    if (!pubConnected || !subConnected) {
+      // Clean up each client independently; after exhausted retries the
+      // Redis v5 client is already closed, so calling destroy() would
+      // throw ClientClosedError.  Guard with isOpen and catch any
+      // unexpected lifecycle errors so cleanup never masks the original
+      // connection failure.
+      await this.safeCleanupClient(pubClient, pubConnected);
+      await this.safeCleanupClient(subClient, subConnected);
+      return;
+    }
 
+    this.adapterConstructor = createAdapter(pubClient, subClient);
+  }
+
+  /** Gracefully tear down a single Redis client, ignoring already-closed errors. */
+  private async safeCleanupClient(
+    client: ReturnType<typeof createRedisClient>,
+    wasConnected: boolean,
+  ): Promise<void> {
     try {
-      await Promise.all([pubClient.connect(), subClient.connect()]);
-      this.adapterConstructor = createAdapter(pubClient, subClient);
-    } catch (error) {
-      console.warn('Failed to connect to Redis for WebSockets. Falling back to default adapter.');
+      if (!client.isOpen) return;
+      if (wasConnected) {
+        await client.quit();
+      } else {
+        client.destroy();
+      }
+    } catch {
+      // Client already closed or transitioning — nothing to do.
     }
   }
 

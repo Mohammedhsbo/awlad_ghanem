@@ -6,11 +6,11 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service.js";
-import { createClient } from "redis";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getStorageConfig } from "../config/storage.config.js";
 import { getBuildInfo } from "../config/env.js";
 import { renderPrometheusMetrics } from "../metrics/metrics.store.js";
+import { connectRedisClient, createRedisClient, shouldConnectToRedis } from "../config/redis.js";
 
 type DependencyState = { status: "ok" | "degraded"; latencyMs?: number; error?: string };
 
@@ -59,17 +59,18 @@ export class HealthController {
   }
 
   private async checkRedis(): Promise<DependencyState> {
-    if (!process.env.REDIS_URL) return { status: "degraded", error: "REDIS_URL not configured" };
+    if (!shouldConnectToRedis()) return { status: "degraded", error: "Redis not configured for tests" };
     const startedAt = Date.now();
-    const client = createClient({ url: process.env.REDIS_URL });
+    const client = createRedisClient();
     try {
-      await client.connect();
+      const connected = await connectRedisClient(client, "Redis dependency health checks will report unavailable");
+      if (!connected) return { status: "degraded", error: "Redis unavailable" };
       await client.ping();
       return { status: "ok", latencyMs: Date.now() - startedAt };
     } catch (error) {
       return { status: "degraded", error: error instanceof Error ? error.message : "redis check failed" };
     } finally {
-      await client.quit().catch(() => undefined);
+      try { if (client.isOpen) await client.quit(); } catch { /* already closed */ }
     }
   }
 

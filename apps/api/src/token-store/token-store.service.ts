@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { createClient, type RedisClientType } from "redis";
+import type { RedisClientType } from "redis";
+import { connectRedisClient, createRedisClient, reportRedisUnavailable, shouldConnectToRedis } from "../config/redis.js";
 
 interface StoredValue {
   value: string;
@@ -13,23 +14,15 @@ export class TokenStoreService implements OnModuleInit, OnModuleDestroy {
   private readonly memory = new Map<string, StoredValue>();
 
   async onModuleInit() {
-    if (!process.env.REDIS_URL) {
+    if (!shouldConnectToRedis()) {
       return;
     }
 
-    this.client = createClient({ url: process.env.REDIS_URL });
-    this.client.on("error", (error) => {
-      console.error("Redis error", error);
-    });
-
-    try {
-      await this.client.connect();
-    } catch (error) {
-      if (process.env.NODE_ENV === "production") {
-        throw error;
-      }
-      console.warn("Redis unavailable; using in-memory token store for local development.");
-      this.client = null;
+    const client = createRedisClient();
+    if (await connectRedisClient(client, "token storage will use in-memory storage")) {
+      this.client = client;
+    } else {
+      try { if (client.isOpen) client.destroy(); } catch { /* already closed */ }
     }
   }
 
@@ -58,15 +51,19 @@ export class TokenStoreService implements OnModuleInit, OnModuleDestroy {
       // batch straight to del() stringified the array, so the wrong key was
       // deleted, and an empty batch made Redis reject the call outright —
       // leaving the user's other sessions alive.
-      for await (const batch of this.client.scanIterator({ MATCH: `${prefix}*`, COUNT: 100 })) {
-        const keys = (Array.isArray(batch) ? batch : [batch]).map(String);
-        const doomed = keys.filter((key) => key.slice(prefix.length) !== exceptTokenId);
+      try {
+        for await (const batch of this.client.scanIterator({ MATCH: `${prefix}*`, COUNT: 100 })) {
+          const keys = (Array.isArray(batch) ? batch : [batch]).map(String);
+          const doomed = keys.filter((key) => key.slice(prefix.length) !== exceptTokenId);
 
-        if (doomed.length > 0) {
-          await this.client.del(doomed);
+          if (doomed.length > 0) {
+            await this.client.del(doomed);
+          }
         }
+        return;
+      } catch (error) {
+        this.disableRedis(error);
       }
-      return;
     }
 
     for (const key of this.memory.keys()) {
@@ -93,8 +90,12 @@ export class TokenStoreService implements OnModuleInit, OnModuleDestroy {
 
   async set(key: string, value: string, ttlSeconds: number) {
     if (this.client) {
-      await this.client.set(key, value, { EX: ttlSeconds });
-      return;
+      try {
+        await this.client.set(key, value, { EX: ttlSeconds });
+        return;
+      } catch (error) {
+        this.disableRedis(error);
+      }
     }
 
     this.memory.set(key, {
@@ -105,7 +106,11 @@ export class TokenStoreService implements OnModuleInit, OnModuleDestroy {
 
   async get(key: string) {
     if (this.client) {
-      return this.client.get(key);
+      try {
+        return await this.client.get(key);
+      } catch (error) {
+        this.disableRedis(error);
+      }
     }
 
     const stored = this.memory.get(key);
@@ -121,10 +126,21 @@ export class TokenStoreService implements OnModuleInit, OnModuleDestroy {
 
   async delete(key: string) {
     if (this.client) {
-      await this.client.del(key);
-      return;
+      try {
+        await this.client.del(key);
+        return;
+      } catch (error) {
+        this.disableRedis(error);
+      }
     }
 
     this.memory.delete(key);
+  }
+
+  private disableRedis(error: unknown): void {
+    if (!this.client) return;
+    reportRedisUnavailable("token storage will use in-memory storage", error);
+    try { if (this.client.isOpen) this.client.destroy(); } catch { /* already closed */ }
+    this.client = null;
   }
 }

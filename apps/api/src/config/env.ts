@@ -8,7 +8,6 @@ const productionOnly = [
   "S3_ACCESS_KEY",
   "S3_SECRET_KEY",
   "S3_ENDPOINT",
-  "REDIS_URL",
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
   "GOOGLE_CALLBACK_URL",

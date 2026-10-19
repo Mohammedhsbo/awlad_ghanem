@@ -1,0 +1,46 @@
+# Dependencies (rebuilt in Docker)
+node_modules
+.pnpm-store
+
+# Git
+.git
+
+# ── Other apps (not needed for API) ──────────────────
+apps/web
+apps/admin
+apps/desktop
+
+# ── Build output (Railway builds from source) ────────
+dist
+apps/api/dist
+packages/*/dist
+.next
+*.tsbuildinfo
+
+# ── Test files ────────────────────────────────────────
+**/*.spec.ts
+**/*.test.ts
+**/*.e2e-spec.ts
+tests
+coverage
+
+# ── Docs & monitoring ─────────────────────────────────
+docs
+monitoring
+apps/api/docs
+
+# ── Docker & local dev files ──────────────────────────
+docker-compose.yml
+docker-compose.prod.yml
+docker-compose.monitoring.yml
+Dockerfile.web
+Dockerfile.admin
+
+# ── Logs & temp ───────────────────────────────────────
+*.log
+dev-server.log
+out.txt
+
+# ── Frontend-only vars (not used by API) ─────────────
+.env
+.env.*

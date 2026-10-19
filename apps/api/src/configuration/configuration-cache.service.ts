@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
-import { createClient, type RedisClientType } from 'redis';
+import type { RedisClientType } from 'redis';
+import { connectRedisClient, createRedisClient, reportRedisUnavailable, shouldConnectToRedis } from '../config/redis.js';
 
 interface CachedValue {
   value: any;
@@ -25,25 +26,16 @@ export class ConfigurationCacheService implements OnModuleInit, OnModuleDestroy 
   private readonly REDIS_TTL = 900; // 15 minutes
 
   async onModuleInit() {
-    if (!process.env.REDIS_URL) {
-      this.logger.warn('REDIS_URL not configured - using in-memory cache only');
+    if (!shouldConnectToRedis()) {
       return;
     }
 
-    this.client = createClient({ url: process.env.REDIS_URL });
-    this.client.on('error', (error) => {
-      this.logger.error('Redis error', error);
-    });
-
-    try {
-      await this.client.connect();
+    const client = createRedisClient();
+    if (await connectRedisClient(client, 'configuration caching will use in-memory storage', (message) => this.logger.warn(message))) {
+      this.client = client;
       this.logger.log('Redis connected for configuration caching');
-    } catch (error) {
-      if (process.env.NODE_ENV === 'production') {
-        this.logger.error('Redis connection failed in production', error);
-      }
-      this.logger.warn('Redis unavailable - using in-memory cache only');
-      this.client = null;
+    } else {
+      try { if (client.isOpen) client.destroy(); } catch { /* already closed */ }
     }
   }
 
@@ -73,7 +65,7 @@ export class ConfigurationCacheService implements OnModuleInit, OnModuleDestroy 
           return parsed as T;
         }
       } catch (error) {
-        this.logger.error(`Redis get failed for key ${key}`, error);
+        this.disableRedis(error);
       }
     }
 
@@ -95,7 +87,7 @@ export class ConfigurationCacheService implements OnModuleInit, OnModuleDestroy 
           EX: this.REDIS_TTL,
         });
       } catch (error) {
-        this.logger.error(`Redis set failed for key ${key}`, error);
+        this.disableRedis(error);
       }
     }
   }
@@ -116,7 +108,7 @@ export class ConfigurationCacheService implements OnModuleInit, OnModuleDestroy 
       try {
         await this.client.del(keyArray);
       } catch (error) {
-        this.logger.error(`Redis delete failed for keys`, error);
+        this.disableRedis(error);
       }
     }
   }
@@ -145,7 +137,7 @@ export class ConfigurationCacheService implements OnModuleInit, OnModuleDestroy 
           }
         }
       } catch (error) {
-        this.logger.error(`Redis pattern invalidation failed for ${pattern}`, error);
+        this.disableRedis(error);
       }
     }
   }
@@ -161,7 +153,7 @@ export class ConfigurationCacheService implements OnModuleInit, OnModuleDestroy 
         await this.invalidatePattern('config:*');
         await this.invalidatePattern('feature:*');
       } catch (error) {
-        this.logger.error('Redis invalidate all failed', error);
+        this.disableRedis(error);
       }
     }
   }
@@ -239,5 +231,12 @@ export class ConfigurationCacheService implements OnModuleInit, OnModuleDestroy 
     // Simple pattern matching for * wildcard
     const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
     return regex.test(key);
+  }
+
+  private disableRedis(error: unknown): void {
+    if (!this.client) return;
+    reportRedisUnavailable('configuration caching will use in-memory storage', error, (message) => this.logger.warn(message));
+    try { if (this.client.isOpen) this.client.destroy(); } catch { /* already closed */ }
+    this.client = null;
   }
 }

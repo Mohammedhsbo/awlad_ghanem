@@ -48,12 +48,17 @@ async function bootstrap() {
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup("api/docs", app, swaggerDocument);
 
-  const port = Number(process.env.API_PORT ?? 3000);
-  await app.listen(port);
+  // Railway injects PORT; fall back to API_PORT for local dev, then 3000.
+  const port = Number(process.env.PORT ?? process.env.API_PORT ?? 3000);
+  // Bind on 0.0.0.0 so Railway's load-balancer can reach the container.
+  await app.listen(port, '0.0.0.0');
 
   if (!production) {
     console.log(`API listening on http://localhost:${port}/api/v1`);
   }
 }
 
-void bootstrap();
+bootstrap().catch((err) => {
+  console.error('Fatal error during API bootstrap:', err);
+  process.exit(1);
+});

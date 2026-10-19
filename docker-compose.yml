@@ -21,7 +21,7 @@ services:
     image: redis:7.4-alpine
     command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD:-redis_dev_password}"]
     ports:
-      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis_data:/data
