@@ -41,6 +41,4 @@ Dockerfile.admin
 dev-server.log
 out.txt
 
-# ── Frontend-only vars (not used by API) ─────────────
-.env
-.env.*
+

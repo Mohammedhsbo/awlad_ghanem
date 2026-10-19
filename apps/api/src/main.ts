@@ -23,6 +23,7 @@ async function bootstrap() {
 
   app.setGlobalPrefix("api/v1", {
     exclude: [
+      { path: "health", method: RequestMethod.GET },
       { path: "health/live", method: RequestMethod.GET },
       { path: "health/ready", method: RequestMethod.GET },
       { path: "health/deps", method: RequestMethod.GET },
@@ -48,8 +49,7 @@ async function bootstrap() {
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup("api/docs", app, swaggerDocument);
 
-  // Railway injects PORT; fall back to API_PORT for local dev, then 3000.
-  const port = Number(process.env.PORT ?? process.env.API_PORT ?? 3000);
+  const port = Number(process.env.PORT ?? 3000);
   // Bind on 0.0.0.0 so Railway's load-balancer can reach the container.
   await app.listen(port, '0.0.0.0');
 

@@ -15,7 +15,11 @@ import type {
   QueueOfflineOperationDto,
 } from '../../../packages/shared-types/src/pos';
 
-const API_BASE = normalizeApiBase(import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1');
+const configuredApiUrl = import.meta.env.VITE_API_URL;
+if (!configuredApiUrl) {
+  throw new Error('VITE_API_URL must be configured before starting the desktop app.');
+}
+const API_BASE = normalizeApiBase(configuredApiUrl);
 
 export function getApiErrorMessage(reason: unknown, fallback = 'Request failed') {
   if (reason instanceof Error && reason.message) {

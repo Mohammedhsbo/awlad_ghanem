@@ -1,47 +1,43 @@
 FROM node:22-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+ENV COREPACK_HOME="/pnpm/corepack"
+RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 WORKDIR /app
 
-FROM base AS deps
+FROM base AS build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/api/package.json apps/api/package.json
-COPY packages/shared-types/package.json packages/shared-types/package.json
-RUN pnpm install --frozen-lockfile
-
-FROM deps AS build
 COPY tsconfig.json ./
-COPY prisma ./prisma
-COPY packages/shared-types ./packages/shared-types
-COPY apps/api ./apps/api
-RUN pnpm db:generate
-RUN pnpm --filter @motorcycle-system/shared-types build
-RUN pnpm --filter @motorcycle-system/api build
+COPY prisma/ ./prisma/
+COPY prisma.config.ts ./
+COPY packages/ ./packages/
+COPY apps/api/ ./apps/api/
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --filter motorcycle-system --filter @motorcycle-system/api... --frozen-lockfile --fetch-retries=5 --fetch-timeout=300000
+RUN pnpm exec prisma generate
+RUN pnpm --filter @motorcycle-system/api... build
 
 FROM base AS prod-deps
 ENV NODE_ENV=production
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY prisma ./prisma
+COPY prisma/ ./prisma/
+COPY prisma.config.ts ./
 COPY packages/shared-types/package.json ./packages/shared-types/package.json
-COPY packages/shared-types/dist ./packages/shared-types/dist
+COPY --from=build /app/packages/shared-types/dist ./packages/shared-types/dist
 COPY apps/api/package.json ./apps/api/package.json
-COPY apps/api/dist ./apps/api/dist
-RUN pnpm install --prod --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --filter motorcycle-system --filter @motorcycle-system/api... --prod --frozen-lockfile --fetch-retries=5 --fetch-timeout=300000
 
-FROM node:22-alpine AS runtime
+FROM base AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-RUN apk add --no-cache wget dumb-init \
-  && addgroup -g 1001 nodeapp \
-  && adduser -D -u 1001 -G nodeapp nodeapp
+RUN addgroup -g 1001 -S nodeapp && adduser -S -u 1001 -G nodeapp nodeapp
 COPY --from=prod-deps --chown=1001:1001 /app/node_modules ./node_modules
-COPY --from=prod-deps --chown=1001:1001 /app/package.json ./package.json
 COPY --from=prod-deps --chown=1001:1001 /app/apps/api ./apps/api
+COPY --from=build --chown=1001:1001 /app/apps/api/dist ./apps/api/dist
 COPY --from=prod-deps --chown=1001:1001 /app/packages/shared-types ./packages/shared-types
 COPY --from=prod-deps --chown=1001:1001 /app/prisma ./prisma
+COPY --from=prod-deps --chown=1001:1001 /app/prisma.config.ts ./prisma.config.ts
+COPY --from=prod-deps --chown=1001:1001 /app/package.json ./package.json
+COPY --from=prod-deps --chown=1001:1001 /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 USER 1001
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:3000/health/ready || exit 1
-ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "apps/api/dist/main.js"]

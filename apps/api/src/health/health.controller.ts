@@ -18,6 +18,11 @@ type DependencyState = { status: "ok" | "degraded"; latencyMs?: number; error?: 
 export class HealthController {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  @Get("health")
+  health() {
+    return { status: "ok" };
+  }
+
   @Get("health/live")
   live() {
     return { status: "ok", timestamp: new Date().toISOString(), ...getBuildInfo() };
